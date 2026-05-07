@@ -50,6 +50,15 @@ query getDWGVariants($cursor: String) {
 }
 """
 
+ACTIVATE_ITEM = """
+mutation inventoryActivate($itemId: ID!, $locationId: ID!) {
+  inventoryActivate(inventoryItemId: $itemId, locationId: $locationId) {
+    inventoryLevel { id }
+    userErrors { field message }
+  }
+}
+"""
+
 SET_ON_HAND = """
 mutation inventorySetOnHandQuantities($input: InventorySetOnHandQuantitiesInput!) {
   inventorySetOnHandQuantities(input: $input) {
@@ -115,6 +124,12 @@ def main():
     print('Fetching inventory item IDs from Shopify (bulk)...')
     shopify_items = fetch_shopify_inventory_items()
     print(f'  {len(shopify_items)} variants found in Shopify')
+
+    # Ensure all items are activated at DWG Warehouse
+    print('Activating inventory items at DWG Warehouse...')
+    for item_id in shopify_items.values():
+        gql(ACTIVATE_ITEM, {'itemId': item_id, 'locationId': LOCATION_ID})
+        time.sleep(0.1)
 
     # Build on-hand payload
     quantities = []
