@@ -22,6 +22,13 @@ jobs:
         run: |
           pip install requests python-dotenv
 
+      - name: Sync DWG inventory to WBR FTP
+        env:
+          FTP_HOST: ${{ secrets.FTP_HOST }}
+          FTP_USER: ${{ secrets.FTP_USER }}
+          FTP_PASS: ${{ secrets.FTP_PASS }}
+        run: python scripts/sync_dwg_ftp.py
+
       - name: Fetch latest inventory from Google Sheets
         run: python scripts/transform_dwg_shopify.py
 
