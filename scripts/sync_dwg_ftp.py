@@ -42,11 +42,18 @@ SEPARATE_SHEETS = {
 }
 
 
-def fetch_sheet(sheet_name):
+def fetch_sheet_raw(sheet_name):
+    """Fetch a sheet and return raw CSV text, unchanged."""
     url = f'https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&sheet={requests.utils.quote(sheet_name)}'
     resp = requests.get(url, timeout=30)
     resp.raise_for_status()
-    reader = csv.DictReader(io.StringIO(resp.text))
+    return resp.text
+
+
+def fetch_sheet(sheet_name):
+    """Fetch an inventory sheet, filter blank Part # rows, zero-fill qty cols."""
+    raw = fetch_sheet_raw(sheet_name)
+    reader = csv.DictReader(io.StringIO(raw))
     qty_cols = ['CA-W1', 'CA-W3', 'CA-W4', 'TX-W6', 'GA-W7', 'NC-W8',
                 'Total', 'OTW', 'CA STOCK', 'TX', 'GA']
     rows = []
@@ -99,13 +106,14 @@ def main():
     except Exception as e:
         logging.error(f"Upload error DWG_Inventory.csv: {e}")
 
-    # Separate sheets
+    # Separate sheets — uploaded raw, exactly as they appear in Google Sheets
     for sheet_name, filename in SEPARATE_SHEETS.items():
         logging.info(f"Fetching {sheet_name}...")
         try:
-            rows = fetch_sheet(sheet_name)
+            raw = fetch_sheet_raw(sheet_name)
             filepath = os.path.join(FEED_DIR, filename)
-            write_csv(rows, filepath)
+            with open(filepath, 'w', newline='', encoding='utf-8') as f:
+                f.write(raw)
             upload_to_wbr(filepath, filename)
         except Exception as e:
             logging.error(f"Error processing {sheet_name}: {e}")
