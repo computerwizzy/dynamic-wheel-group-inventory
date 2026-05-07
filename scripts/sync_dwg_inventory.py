@@ -28,24 +28,12 @@ API_VERSION  = '2026-01'
 GRAPHQL_URL  = f'https://{STORE_URL}/admin/api/{API_VERSION}/graphql.json'
 CSV_PATH     = BASE_DIR / 'DWG_Shopify_Import.csv'
 
-LOCATION_NAME = os.environ.get('DWG_LOCATION_NAME', 'DWG Warehouse')
+LOCATION_ID   = os.environ.get('DWG_LOCATION_ID', 'gid://shopify/Location/91987378411')
 
 HEADERS = {
     'Content-Type': 'application/json',
     'X-Shopify-Access-Token': ACCESS_TOKEN,
 }
-
-QUERY_LOCATION = """
-query getLocations($cursor: String) {
-  locations(first: 50, after: $cursor) {
-    edges {
-      cursor
-      node { id name }
-    }
-    pageInfo { hasNextPage }
-  }
-}
-"""
 
 QUERY_VARIANTS = """
 query getDWGVariants($cursor: String) {
@@ -78,20 +66,6 @@ def gql(query, variables=None):
     resp.raise_for_status()
     return resp.json()
 
-
-def get_location_id(name):
-    cursor = None
-    while True:
-        result = gql(QUERY_LOCATION, {'cursor': cursor})
-        edges  = result['data']['locations']['edges']
-        for edge in edges:
-            if edge['node']['name'] == name:
-                return edge['node']['id']
-            cursor = edge['cursor']
-        if not result['data']['locations']['pageInfo']['hasNextPage']:
-            break
-        time.sleep(0.2)
-    return None
 
 
 def fetch_shopify_inventory_items():
@@ -130,13 +104,7 @@ def main():
         print('ERROR: SHOPIFY_STORE_URL and SHOPIFY_ACCESS_TOKEN must be set')
         return
 
-    # Resolve location
-    print(f'Looking up location "{LOCATION_NAME}"...')
-    location_id = get_location_id(LOCATION_NAME)
-    if not location_id:
-        print(f'ERROR: location "{LOCATION_NAME}" not found in Shopify')
-        return
-    print(f'  Location ID: {location_id}')
+    print(f'Using location ID: {LOCATION_ID}')
 
     # Load CSV quantities
     print('Loading quantities from CSV...')
@@ -154,7 +122,7 @@ def main():
     for sku, qty in csv_qtys.items():
         inv_id = shopify_items.get(sku)
         if inv_id:
-            quantities.append({'inventoryItemId': inv_id, 'locationId': location_id, 'quantity': qty})
+            quantities.append({'inventoryItemId': inv_id, 'locationId': LOCATION_ID, 'quantity': qty})
         else:
             not_found.append(sku)
 
@@ -165,7 +133,7 @@ def main():
         print('Nothing to sync.')
         return
 
-    print(f'\nSetting on-hand quantities for {len(quantities)} SKUs at {LOCATION_NAME}...')
+    print(f'\nSetting on-hand quantities for {len(quantities)} SKUs at {LOCATION_ID}...')
 
     BATCH   = 100
     updated = 0

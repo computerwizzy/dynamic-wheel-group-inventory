@@ -29,5 +29,5 @@ jobs:
         env:
           SHOPIFY_STORE_URL: ${{ secrets.SHOPIFY_STORE_URL }}
           SHOPIFY_ACCESS_TOKEN: ${{ secrets.SHOPIFY_ACCESS_TOKEN }}
-          DWG_LOCATION_NAME: ${{ secrets.DWG_LOCATION_NAME }}
+          DWG_LOCATION_ID: ${{ secrets.DWG_LOCATION_ID }}
         run: python scripts/sync_dwg_inventory.py
