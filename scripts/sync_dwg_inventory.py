@@ -1,6 +1,10 @@
 """
 Sync DWG inventory quantities to Shopify (DWG Warehouse location).
 
+- Looks up "DWG Warehouse" location ID dynamically (no hardcoded ID).
+- Bulk-fetches all DIABLO/GIANNA variant inventory item IDs in one pass.
+- Sets on-hand quantities at DWG Warehouse in batches of 100.
+
 Run:  python scripts/sync_dwg_inventory.py
 Env:  SHOPIFY_STORE_URL, SHOPIFY_ACCESS_TOKEN
 """
@@ -24,38 +28,45 @@ API_VERSION  = '2026-01'
 GRAPHQL_URL  = f'https://{STORE_URL}/admin/api/{API_VERSION}/graphql.json'
 CSV_PATH     = BASE_DIR / 'DWG_Shopify_Import.csv'
 
-LOCATION_ID  = 'gid://shopify/Location/91987378411'  # DWG Warehouse (Alabama)
+LOCATION_NAME = 'DWG Warehouse'
 
 HEADERS = {
     'Content-Type': 'application/json',
     'X-Shopify-Access-Token': ACCESS_TOKEN,
 }
 
-QUERY_INVENTORY_ITEM = """
-query getVariantBySku($sku: String!) {
-  productVariants(first: 1, query: $sku) {
+QUERY_LOCATION = """
+query getLocations($cursor: String) {
+  locations(first: 50, after: $cursor) {
     edges {
-      node {
-        sku
-        inventoryItem {
-          id
-        }
-      }
+      cursor
+      node { id name }
     }
+    pageInfo { hasNextPage }
   }
 }
 """
 
-SET_INVENTORY = """
+QUERY_VARIANTS = """
+query getDWGVariants($cursor: String) {
+  productVariants(first: 100, after: $cursor, query: "vendor:DIABLO OR vendor:GIANNA") {
+    edges {
+      cursor
+      node {
+        sku
+        inventoryItem { id }
+      }
+    }
+    pageInfo { hasNextPage }
+  }
+}
+"""
+
+SET_ON_HAND = """
 mutation inventorySetOnHandQuantities($input: InventorySetOnHandQuantitiesInput!) {
   inventorySetOnHandQuantities(input: $input) {
-    inventoryAdjustmentGroup {
-      id
-    }
-    userErrors {
-      field
-      message
-    }
+    inventoryAdjustmentGroup { id }
+    userErrors { field message }
   }
 }
 """
@@ -66,6 +77,39 @@ def gql(query, variables=None):
                          json={'query': query, 'variables': variables or {}}, timeout=30)
     resp.raise_for_status()
     return resp.json()
+
+
+def get_location_id(name):
+    cursor = None
+    while True:
+        result = gql(QUERY_LOCATION, {'cursor': cursor})
+        edges  = result['data']['locations']['edges']
+        for edge in edges:
+            if edge['node']['name'] == name:
+                return edge['node']['id']
+            cursor = edge['cursor']
+        if not result['data']['locations']['pageInfo']['hasNextPage']:
+            break
+        time.sleep(0.2)
+    return None
+
+
+def fetch_shopify_inventory_items():
+    """Returns {sku: inventory_item_id} for all DIABLO/GIANNA variants."""
+    items  = {}
+    cursor = None
+    while True:
+        result = gql(QUERY_VARIANTS, {'cursor': cursor})
+        edges  = result['data']['productVariants']['edges']
+        for edge in edges:
+            node = edge['node']
+            if node['sku']:
+                items[node['sku']] = node['inventoryItem']['id']
+            cursor = edge['cursor']
+        if not result['data']['productVariants']['pageInfo']['hasNextPage']:
+            break
+        time.sleep(0.3)
+    return items
 
 
 def load_csv_quantities():
@@ -81,70 +125,69 @@ def load_csv_quantities():
     return skus
 
 
-def fetch_inventory_item_id(sku):
-    result = gql(QUERY_INVENTORY_ITEM, {'sku': f'sku:{sku}'})
-    edges = result.get('data', {}).get('productVariants', {}).get('edges', [])
-    if not edges:
-        return None
-    node = edges[0]['node']
-    if node['sku'] != sku:
-        return None
-    return node['inventoryItem']['id']
-
-
 def main():
     if not STORE_URL or not ACCESS_TOKEN:
         print('ERROR: SHOPIFY_STORE_URL and SHOPIFY_ACCESS_TOKEN must be set')
         return
 
-    print('Loading quantities from CSV...')
-    skus = load_csv_quantities()
-    print(f'  {len(skus)} SKUs — {sum(1 for q in skus.values() if q > 0)} with stock')
+    # Resolve location
+    print(f'Looking up location "{LOCATION_NAME}"...')
+    location_id = get_location_id(LOCATION_NAME)
+    if not location_id:
+        print(f'ERROR: location "{LOCATION_NAME}" not found in Shopify')
+        return
+    print(f'  Location ID: {location_id}')
 
-    # Build quantities list in batches of 100
-    print('Fetching inventory item IDs from Shopify...')
+    # Load CSV quantities
+    print('Loading quantities from CSV...')
+    csv_qtys = load_csv_quantities()
+    print(f'  {len(csv_qtys)} SKUs — {sum(1 for q in csv_qtys.values() if q > 0)} with stock')
+
+    # Bulk fetch inventory item IDs from Shopify
+    print('Fetching inventory item IDs from Shopify (bulk)...')
+    shopify_items = fetch_shopify_inventory_items()
+    print(f'  {len(shopify_items)} variants found in Shopify')
+
+    # Build on-hand payload
     quantities = []
-    not_found = []
-    for i, (sku, qty) in enumerate(skus.items(), start=1):
-        inv_id = fetch_inventory_item_id(sku)
+    not_found  = []
+    for sku, qty in csv_qtys.items():
+        inv_id = shopify_items.get(sku)
         if inv_id:
-            quantities.append({'inventoryItemId': inv_id, 'locationId': LOCATION_ID, 'quantity': qty})
-            print(f'  [{i}/{len(skus)}] {sku}: qty={qty}')
+            quantities.append({'inventoryItemId': inv_id, 'locationId': location_id, 'quantity': qty})
         else:
             not_found.append(sku)
-            print(f'  [{i}/{len(skus)}] {sku}: NOT FOUND in Shopify')
-        time.sleep(0.3)
+
+    if not_found:
+        print(f'  WARNING: {len(not_found)} SKUs not found in Shopify: {not_found}')
 
     if not quantities:
-        print('Nothing to set.')
+        print('Nothing to sync.')
         return
 
-    print(f'\nSetting {len(quantities)} inventory levels at DWG Warehouse...')
+    print(f'\nSetting on-hand quantities for {len(quantities)} SKUs at {LOCATION_NAME}...')
 
-    # Send in batches of 100 (API limit)
-    BATCH = 100
+    BATCH   = 100
     updated = 0
     errors  = 0
     for start in range(0, len(quantities), BATCH):
-        batch = quantities[start:start + BATCH]
-        result = gql(SET_INVENTORY, {
+        batch  = quantities[start:start + BATCH]
+        result = gql(SET_ON_HAND, {
             'input': {
-                'reason': 'correction',
+                'reason':       'correction',
                 'setQuantities': batch,
             }
         })
         errs = result.get('data', {}).get('inventorySetOnHandQuantities', {}).get('userErrors', [])
         if errs:
             errors += len(batch)
-            print(f'ERROR on batch {start//BATCH + 1}: {errs}')
+            print(f'  ERROR batch {start // BATCH + 1}: {errs}')
         else:
             updated += len(batch)
-            print(f'Batch {start//BATCH + 1}: {len(batch)} items set OK')
+            print(f'  Batch {start // BATCH + 1}: {len(batch)} items set OK')
         time.sleep(0.5)
 
-    print(f'\nDone. Updated: {updated}, Not found: {len(not_found)}, Errors: {errors}')
-    if not_found:
-        print('SKUs not found in Shopify:', not_found)
+    print(f'\nDone. On-hand updated: {updated}, Not found: {len(not_found)}, Errors: {errors}')
 
 
 if __name__ == '__main__':
