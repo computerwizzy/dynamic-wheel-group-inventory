@@ -35,24 +35,13 @@ CSV_HEADERS = ['Part #', 'Wheel', 'Bolt', 'Offset', 'Hub', 'Finish',
 # Sheets to combine into one file
 COMBINED_SHEETS = ['Diablo', 'Offroad', 'Curva', 'Tuners', 'Gianna']
 
-# Sheets to upload as separate files
-SEPARATE_SHEETS = {
-    'Inventory File Links': 'DWG_Inventory_File_Links.csv',
-    'Master Sheet Link':    'DWG_Master_Sheet.csv',
-}
-
-
-def fetch_sheet_raw(sheet_name):
-    """Fetch a sheet and return raw CSV text, unchanged."""
-    url = f'https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&sheet={requests.utils.quote(sheet_name)}'
-    resp = requests.get(url, timeout=30)
-    resp.raise_for_status()
-    return resp.text
 
 
 def fetch_sheet(sheet_name):
-    """Fetch an inventory sheet, filter blank Part # rows, zero-fill qty cols."""
-    raw = fetch_sheet_raw(sheet_name)
+    url = f'https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&sheet={requests.utils.quote(sheet_name)}'
+    resp = requests.get(url, timeout=30)
+    resp.raise_for_status()
+    raw = resp.text
     reader = csv.DictReader(io.StringIO(raw))
     qty_cols = ['CA-W1', 'CA-W3', 'CA-W4', 'TX-W6', 'GA-W7', 'NC-W8',
                 'Total', 'OTW', 'CA STOCK', 'TX', 'GA']
@@ -105,18 +94,6 @@ def main():
         upload_to_wbr(combined_file, 'DWG_Inventory.csv')
     except Exception as e:
         logging.error(f"Upload error DWG_Inventory.csv: {e}")
-
-    # Separate sheets — uploaded raw, exactly as they appear in Google Sheets
-    for sheet_name, filename in SEPARATE_SHEETS.items():
-        logging.info(f"Fetching {sheet_name}...")
-        try:
-            raw = fetch_sheet_raw(sheet_name)
-            filepath = os.path.join(FEED_DIR, filename)
-            with open(filepath, 'w', newline='', encoding='utf-8') as f:
-                f.write(raw)
-            upload_to_wbr(filepath, filename)
-        except Exception as e:
-            logging.error(f"Error processing {sheet_name}: {e}")
 
     logging.info(f"=== DWG Sync Done in {datetime.datetime.now() - start} ===")
 
