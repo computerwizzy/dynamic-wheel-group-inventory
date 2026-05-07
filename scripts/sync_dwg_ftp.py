@@ -47,7 +47,16 @@ def fetch_sheet(sheet_name):
     resp = requests.get(url, timeout=30)
     resp.raise_for_status()
     reader = csv.DictReader(io.StringIO(resp.text))
-    rows = [row for row in reader if row.get('Part #', '').strip()]
+    qty_cols = ['CA-W1', 'CA-W3', 'CA-W4', 'TX-W6', 'GA-W7', 'NC-W8',
+                'Total', 'OTW', 'CA STOCK', 'TX', 'GA']
+    rows = []
+    for row in reader:
+        if not row.get('Part #', '').strip():
+            continue
+        for col in qty_cols:
+            if col in row and row[col].strip() == '':
+                row[col] = '0'
+        rows.append(row)
     logging.info(f"  {sheet_name}: {len(rows)} rows")
     return rows
 
