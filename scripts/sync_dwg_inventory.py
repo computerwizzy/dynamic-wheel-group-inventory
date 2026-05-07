@@ -28,7 +28,7 @@ API_VERSION  = '2026-01'
 GRAPHQL_URL  = f'https://{STORE_URL}/admin/api/{API_VERSION}/graphql.json'
 CSV_PATH     = BASE_DIR / 'DWG_Shopify_Import.csv'
 
-LOCATION_NAME = 'DWG Warehouse'
+LOCATION_NAME = os.environ.get('DWG_LOCATION_NAME', 'DWG Warehouse')
 
 HEADERS = {
     'Content-Type': 'application/json',
